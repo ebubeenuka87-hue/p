@@ -52,11 +52,16 @@ export async function PATCH(request: Request) {
       const update = await tx.order.updateMany({ where: { id: order.id, status: order.status }, data: { status: input.status } });
       if (!update.count) return { error: "This order was updated by another administrator. Refresh and try again.", status: 409 };
       if (input.status === "CANCELLED" && order.paymentStatus !== "PAID" && !order.stockReleased) {
-        for (const item of order.items) {
-          await tx.product.update({ where: { id: item.productId }, data: { stock: { increment: item.quantity } } });
+        const released = await tx.order.updateMany({
+          where: { id: order.id, stockReleased: false, paymentStatus: { not: "PAID" } },
+          data: { paymentStatus: "CANCELLED", stockReleased: true },
+        });
+        if (released.count) {
+          for (const item of order.items) {
+            await tx.product.update({ where: { id: item.productId }, data: { stock: { increment: item.quantity } } });
+          }
+          await tx.payment.updateMany({ where: { orderId: order.id, status: "PENDING" }, data: { status: "CANCELLED" } });
         }
-        await tx.order.update({ where: { id: order.id }, data: { paymentStatus: "CANCELLED", stockReleased: true } });
-        await tx.payment.updateMany({ where: { orderId: order.id, status: "PENDING" }, data: { status: "CANCELLED" } });
       }
       return { ok: true };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });

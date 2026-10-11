@@ -14,9 +14,9 @@ export function NewsletterForm() {
     setMessage("");
     setError("");
     setBusy(true);
-    const email = new FormData(form).get("email");
+    const values = new FormData(form);
     try {
-      const response = await fetch("/api/newsletter", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }) });
+      const response = await fetch("/api/newsletter", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: values.get("email"), consent: values.get("consent") === "on" }) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? "Please try again.");
       setMessage(data.message);
@@ -24,5 +24,5 @@ export function NewsletterForm() {
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Subscription failed."); }
     finally { setBusy(false); }
   }
-  return <><form className="newsletter-form" onSubmit={submit}><label className="sr-only" htmlFor={inputId}>Email address</label><input id={inputId} name="email" type="email" placeholder="Your email address" required /><button type="submit" aria-label="Subscribe" disabled={busy}>→</button></form>{(message || error) && <p role={error ? "alert" : "status"} className={error ? "form-error" : "form-success"}>{message || error}</p>}</>;
+  return <><form className="newsletter-signup" onSubmit={submit}><div className="newsletter-form"><label className="sr-only" htmlFor={inputId}>Email address</label><input id={inputId} name="email" type="email" placeholder="Your email address" required /><button type="submit" aria-label="Subscribe" disabled={busy}>→</button></div><label className="newsletter-consent"><input name="consent" type="checkbox" required /> I agree to receive occasional product and store news.</label></form>{(message || error) && <p role={error ? "alert" : "status"} className={error ? "form-error" : "form-success"}>{message || error}</p>}</>;
 }

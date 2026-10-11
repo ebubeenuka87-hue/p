@@ -1,21 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { formatNaira } from "@/lib/money";
 
 type Customer = { id: string; name: string; email: string; phone: string | null; createdAt: string; _count?: { orders: number }; orders?: { id: string; orderNumber: string; status: string; paymentStatus: string; totalKobo: number }[] };
 
-export function AdminCustomers() {
-  const [customers, setCustomers] = useState<Customer[]>([]);
+export function AdminCustomers({ initialCustomers }: { initialCustomers: Customer[] }) {
+  const [customers] = useState<Customer[]>(initialCustomers);
   const [selected, setSelected] = useState<Customer | null>(null);
   const [error, setError] = useState("");
-  useEffect(() => {
-    fetch("/api/admin/customers").then(async (response) => {
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error ?? "Customers could not be loaded.");
-      setCustomers(data.customers);
-    }).catch((caught: unknown) => setError(caught instanceof Error ? caught.message : "Customers could not be loaded."));
-  }, []);
   async function show(id: string) {
     const response = await fetch(`/api/admin/customers?id=${encodeURIComponent(id)}`);
     const data = await response.json();

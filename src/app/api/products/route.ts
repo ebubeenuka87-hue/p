@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { errorResponse } from "@/lib/http";
+import { requireUser } from "@/lib/auth";
 
 export async function GET(request: Request) {
   try {
+    await requireUser("CUSTOMER");
     const url = new URL(request.url);
     const ids = url.searchParams.getAll("id").slice(0, 30);
     const search = url.searchParams.get("q")?.trim().slice(0, 100);

@@ -5,38 +5,57 @@ import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
 import { errorResponse, requireSameOrigin } from "@/lib/http";
 import { checkoutSchema } from "@/lib/validation";
+import { releaseReservedOrder } from "@/lib/payments";
 
 class StockError extends Error {}
-
-function paystackSecret() {
-  const secret = process.env.PAYSTACK_SECRET_KEY;
-  if (!secret?.startsWith("sk_")) throw new Error("Paystack is not configured.");
-  return secret;
-}
 
 export async function POST(request: Request) {
   try {
     await requireSameOrigin(request);
     const user = await requireUser("CUSTOMER");
     const input = checkoutSchema.parse(await request.json());
+    const secret = process.env.PAYSTACK_SECRET_KEY;
+    if (!secret?.startsWith("sk_")) {
+      return NextResponse.json({ error: "Secure payment is not available right now. Please contact the store." }, { status: 503 });
+    }
     const checkoutKey = request.headers.get("idempotency-key");
     if (!checkoutKey || !/^[\w-]{16,100}$/.test(checkoutKey)) {
       return NextResponse.json({ error: "Please refresh checkout and try again." }, { status: 400 });
     }
-    const existing = await prisma.order.findUnique({ where: { checkoutKey }, include: { payment: true } });
-    if (existing) {
-      if (existing.userId !== user.id || !existing.payment) return NextResponse.json({ error: "Unable to resume checkout." }, { status: 409 });
-      if (existing.payment.authorizationUrl && existing.payment.status === "PENDING") return NextResponse.json({ authorizationUrl: existing.payment.authorizationUrl });
-      return NextResponse.json({ error: "This checkout has already been processed. Please review your orders." }, { status: 409 });
-    }
-
     const quantities = new Map<string, number>();
     for (const item of input.items) quantities.set(item.productId, (quantities.get(item.productId) ?? 0) + item.quantity);
     if ([...quantities.values()].some((quantity) => quantity > 20)) {
       return NextResponse.json({ error: "Please reduce the quantity of one or more items." }, { status: 400 });
     }
+    const existing = await prisma.order.findUnique({ where: { checkoutKey }, include: { payment: true, items: true } });
+    if (existing) {
+      if (existing.userId !== user.id || !existing.payment) return NextResponse.json({ error: "Unable to resume checkout." }, { status: 409 });
+      if (existing.payment.status === "PENDING" && existing.payment.authorizationUrl) {
+        const sameDelivery = existing.fullName === input.fullName &&
+          existing.email === input.email &&
+          existing.phone === input.phone &&
+          existing.deliveryAddress === input.address &&
+          existing.city === input.city &&
+          existing.state === input.state &&
+          existing.deliveryInformation === (input.deliveryInformation ?? null);
+        const sameItems = existing.items.length === quantities.size &&
+          existing.items.every((item) => quantities.get(item.productId) === item.quantity);
+        if (sameDelivery && sameItems) return NextResponse.json({ authorizationUrl: existing.payment.authorizationUrl });
+        return NextResponse.json({ error: "A payment for this checkout is already in progress. Please check your orders before changing it." }, { status: 409 });
+      }
+      if (existing.payment.status !== "FAILED" && existing.payment.status !== "CANCELLED") {
+        return NextResponse.json({ error: "This payment is already being processed. Please check your orders before trying again." }, { status: 409 });
+      }
+      const releasedKey = await prisma.order.updateMany({
+        where: { id: existing.id, checkoutKey, paymentStatus: { in: ["FAILED", "CANCELLED"] } },
+        data: { checkoutKey: null },
+      });
+      if (!releasedKey.count) {
+        return NextResponse.json({ error: "This checkout changed while you were submitting it. Please refresh and try again." }, { status: 409 });
+      }
+    }
     const deliveryNaira = Number(process.env.DELIVERY_FEE_NGN ?? "2500");
-    if (!Number.isSafeInteger(deliveryNaira) || deliveryNaira < 0) throw new Error("DELIVERY_FEE_NGN must be a whole number.");
+    if (!Number.isSafeInteger(deliveryNaira) || deliveryNaira < 0 || deliveryNaira > 21_474_836) throw new Error("DELIVERY_FEE_NGN must be a whole number within the supported payment limit.");
     const orderNumber = `TOR-${Date.now().toString(36).toUpperCase()}-${randomBytes(3).toString("hex").toUpperCase()}`;
     const reference = `toria_${randomUUID().replaceAll("-", "")}`;
     const result = await prisma.$transaction(async (tx) => {
@@ -47,7 +66,8 @@ export async function POST(request: Request) {
         if (product.stock < quantity) throw new StockError(`${product.name} does not have enough stock available.`);
         return sum + product.priceKobo * quantity;
       }, 0);
-      if (!Number.isSafeInteger(subtotalKobo) || subtotalKobo > 2_147_483_647 - deliveryNaira * 100) {
+      const deliveryFeeKobo = subtotalKobo >= 15_000_000 ? 0 : deliveryNaira * 100;
+      if (!Number.isSafeInteger(subtotalKobo) || subtotalKobo > 2_147_483_647 - deliveryFeeKobo) {
         throw new StockError("This order exceeds the maximum checkout amount. Please contact the store.");
       }
       for (const product of products) {
@@ -58,7 +78,6 @@ export async function POST(request: Request) {
         });
         if (updated.count !== 1) throw new StockError(`${product.name} has just sold out. Please update your bag.`);
       }
-      const deliveryFeeKobo = subtotalKobo >= 15_000_000 ? 0 : deliveryNaira * 100;
       const order = await tx.order.create({
         data: {
           orderNumber, checkoutKey, userId: user.id,
@@ -85,7 +104,7 @@ export async function POST(request: Request) {
     try {
       paystackResponse = await fetch("https://api.paystack.co/transaction/initialize", {
         method: "POST",
-        headers: { Authorization: `Bearer ${paystackSecret()}`, "Content-Type": "application/json" },
+        headers: { Authorization: `Bearer ${secret}`, "Content-Type": "application/json" },
         body: JSON.stringify({
           email: input.email,
           amount: result.totalKobo,
@@ -97,13 +116,13 @@ export async function POST(request: Request) {
         signal: AbortSignal.timeout(15_000),
       });
     } catch {
-      await releaseOrder(result.id, "FAILED");
-      return NextResponse.json({ error: "We couldn't connect to Paystack. Your items have been returned to stock; please try again." }, { status: 502 });
+      console.error("Paystack initialization outcome is unknown", { orderId: result.id, reference });
+      return NextResponse.json({ error: "We couldn't confirm whether Paystack started this payment. Your order is reserved; check your account orders or contact the store before trying again." }, { status: 502 });
     }
     const gateway = await paystackResponse.json().catch(() => null) as { status?: boolean; message?: string; data?: { authorization_url?: string; reference?: string } } | null;
     const authorizationUrl = gateway?.data?.authorization_url;
     if (!paystackResponse.ok || !gateway?.status || !authorizationUrl || gateway.data?.reference !== reference) {
-      await releaseOrder(result.id, "FAILED");
+      await releaseReservedOrder(result.id, "FAILED");
       console.error("Paystack initialization rejected", { status: paystackResponse.status, message: gateway?.message });
       return NextResponse.json({ error: "We couldn't start your payment. Your items have been returned to stock; please try again." }, { status: 502 });
     }
@@ -111,22 +130,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ authorizationUrl });
   } catch (error) {
     if (error instanceof StockError) return NextResponse.json({ error: error.message }, { status: 409 });
-    if (error instanceof StockError) return NextResponse.json({ error: error.message }, { status: 409 });
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2034") {
       return NextResponse.json({ error: "Stock just changed. Please refresh your bag and try again." }, { status: 409 });
     }
     return errorResponse(error);
   }
-}
-
-async function releaseOrder(orderId: string, paymentStatus: "FAILED" | "CANCELLED") {
-  await prisma.$transaction(async (tx) => {
-    const order = await tx.order.findUnique({ where: { id: orderId }, include: { items: true } });
-    if (!order || order.stockReleased) return;
-    for (const item of order.items) {
-      await tx.product.update({ where: { id: item.productId }, data: { stock: { increment: item.quantity } } });
-    }
-    await tx.order.update({ where: { id: orderId }, data: { status: "CANCELLED", paymentStatus, stockReleased: true } });
-    await tx.payment.update({ where: { orderId }, data: { status: paymentStatus } });
-  });
 }

@@ -8,7 +8,7 @@ import { emailSchema } from "@/lib/validation";
 export async function POST(request: Request) {
   try {
     await requireSameOrigin(request);
-    const { email } = z.object({ email: emailSchema }).parse(await request.json());
+    const { email } = z.object({ email: emailSchema, consent: z.literal(true) }).parse(await request.json());
     try {
       await prisma.newsletterSubscriber.create({ data: { email } });
     } catch (error) {

@@ -16,7 +16,7 @@ export async function POST(request: Request) {
     if (!smtpHost || !smtpUser || !smtpPassword) {
       return NextResponse.json({ error: "Password reset email is not configured yet. Please contact the store for help." }, { status: 503 });
     }
-    const user = await prisma.user.findUnique({ where: { email }, select: { id: true, email: true } });
+    const user = await prisma.user.findUnique({ where: { email }, select: { id: true, email: true, role: true } });
     if (user) {
       const token = randomBytes(32).toString("hex");
       const tokenHash = createHash("sha256").update(token).digest("hex");
@@ -28,7 +28,8 @@ export async function POST(request: Request) {
         secure: Number(process.env.SMTP_PORT ?? "587") === 465,
         auth: { user: smtpUser, pass: smtpPassword },
       });
-      const url = new URL("/reset-password", process.env.NEXT_PUBLIC_APP_URL ?? new URL(request.url).origin);
+      const resetPath = user.role === "ADMIN" ? "/admin/reset-password" : "/reset-password";
+      const url = new URL(resetPath, process.env.NEXT_PUBLIC_APP_URL ?? new URL(request.url).origin);
       url.searchParams.set("token", token);
       await transporter.sendMail({
         from: process.env.SMTP_FROM ?? smtpUser,

@@ -2,23 +2,20 @@
 
 import Link from "next/link";
 import { useEffect, useState, type FormEvent } from "react";
-import { useRouter } from "next/navigation";
-import { readCart, writeCart } from "@/lib/cart";
+import { readCart } from "@/lib/cart";
 import { formatNaira } from "@/lib/money";
 
 type Quote = { items: { id: string; name: string; quantity: number; priceKobo: number }[]; subtotalKobo: number; deliveryFeeKobo: number; totalKobo: number };
 
 export function CheckoutForm({ customer }: { customer: { name: string; email: string; phone: string | null } }) {
-  const router = useRouter();
   const [quote, setQuote] = useState<Quote | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     const cart = readCart();
-    if (!cart.length) { setError("Your bag is empty. Add something lovely before checking out."); return; }
     const query = new URLSearchParams();
     cart.forEach((item) => query.append("item", `${item.productId}:${item.quantity}`));
-    fetch(`/api/checkout/quote?${query}`).then(async (response) => {
+    fetch(`/api/checkout/quote${query.size ? `?${query}` : ""}`).then(async (response) => {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? "We couldn't confirm your bag.");
       setQuote(data);

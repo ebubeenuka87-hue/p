@@ -14,6 +14,25 @@ export const loginSchema = z.object({
   password: z.string().min(1).max(128),
 });
 
+export const verificationSchema = z.object({
+  email: emailSchema,
+  code: z.string().regex(/^\d{6}$/, "Enter the six-digit code sent to your phone."),
+});
+
+export const profileSchema = z.object({
+  name: z.string().trim().min(2).max(100),
+  phone: z.string().trim().min(7).max(24),
+});
+
+export const complaintSchema = z.object({
+  name: z.string().trim().min(2).max(100),
+  email: emailSchema,
+  phone: z.string().trim().min(7).max(24),
+  message: z.string().trim().min(10).max(5000),
+});
+
+export const complaintStatusSchema = z.enum(["OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"]);
+
 export const checkoutSchema = z.object({
   items: z.array(z.object({
     productId: z.string().min(1),
@@ -36,5 +55,5 @@ export const productSchema = z.object({
   stock: z.number().int().min(0).max(100000),
   active: z.boolean(),
   categorySlug: z.enum(["bags", "sandals"]),
-  imageUrls: z.array(z.string().url().max(2048)).max(8),
+  imageUrls: z.array(z.string().url().max(2048).refine((value) => new URL(value).protocol === "https:", "Product images must use HTTPS.")).max(8).default([]),
 });

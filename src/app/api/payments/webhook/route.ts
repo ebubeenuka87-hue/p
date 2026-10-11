@@ -14,7 +14,13 @@ export async function POST(request: Request) {
   if (rawBody.length > 1_000_000 || !validPaystackSignature(rawBody, request.headers.get("x-paystack-signature"))) {
     return NextResponse.json({ error: "Invalid webhook signature." }, { status: 401 });
   }
-  const parsed = eventSchema.safeParse(JSON.parse(rawBody));
+  let payload: unknown;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    return NextResponse.json({ error: "Invalid webhook payload." }, { status: 400 });
+  }
+  const parsed = eventSchema.safeParse(payload);
   if (!parsed.success) return NextResponse.json({ error: "Invalid webhook payload." }, { status: 400 });
   if (parsed.data.event !== "charge.success" && parsed.data.event !== "charge.failed") {
     return NextResponse.json({ received: true });

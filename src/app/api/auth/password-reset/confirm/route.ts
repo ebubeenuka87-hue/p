@@ -18,7 +18,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "This password reset link is invalid or has expired. Please request a new one." }, { status: 400 });
     }
     await prisma.$transaction([
-      prisma.user.update({ where: { id: reset.userId }, data: { passwordHash: await hash(password, 12) } }),
+      prisma.user.update({ where: { id: reset.userId }, data: { passwordHash: await hash(password, 12), sessionVersion: { increment: 1 } } }),
       prisma.passwordResetToken.delete({ where: { id: reset.id } }),
     ]);
     return NextResponse.json({ ok: true });

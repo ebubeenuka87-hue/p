@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { formatNaira } from "@/lib/money";
 
 type Order = { id: string; orderNumber: string; fullName: string; email: string; status: string; paymentStatus: string; totalKobo: number; createdAt: string; items: { productName: string; quantity: number }[] };
 const statuses = ["PENDING", "PAID", "PROCESSING", "SHIPPED", "DELIVERED", "CANCELLED"];
 
-export function AdminOrders() {
-  const [orders, setOrders] = useState<Order[]>([]);
+export function AdminOrders({ initialOrders }: { initialOrders: Order[] }) {
+  const [orders, setOrders] = useState<Order[]>(initialOrders);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [error, setError] = useState("");
@@ -20,7 +20,6 @@ export function AdminOrders() {
     if (!response.ok) throw new Error(data.error ?? "Orders could not be loaded.");
     setOrders(data.orders);
   }
-  useEffect(() => { void load().catch((caught: unknown) => setError(caught instanceof Error ? caught.message : "Orders could not be loaded.")); }, []);
   async function update(orderId: string, nextStatus: string) {
     setError("");
     const response = await fetch("/api/admin/orders", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderId, status: nextStatus }) });

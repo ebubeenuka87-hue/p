@@ -1,18 +1,20 @@
+import "server-only";
 import { cookies } from "next/headers";
 import { SignJWT, jwtVerify } from "jose";
 import type { UserRole } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { configuredSessionSecret } from "@/lib/session-secret";
 
 const cookieName = "toria_session";
 
 function sessionKey() {
-  const secret = process.env.SESSION_SECRET;
-  if (!secret || secret.length < 32) throw new Error("SESSION_SECRET must contain at least 32 characters.");
+  const secret = configuredSessionSecret();
+  if (!secret) throw new Error("Set SESSION_SECRET to at least 32 random characters before enabling accounts.");
   return new TextEncoder().encode(secret);
 }
 
-export async function createSession(user: { id: string; role: UserRole }) {
-  const token = await new SignJWT({ role: user.role })
+export async function createSession(user: { id: string; role: UserRole; sessionVersion: number }) {
+  const token = await new SignJWT({ role: user.role, version: user.sessionVersion })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(user.id)
     .setIssuedAt()
@@ -37,17 +39,21 @@ export async function currentUser() {
   const token = (await cookies()).get(cookieName)?.value;
   if (!token) return null;
   let subject: string | undefined;
+  let version: number | undefined;
   try {
     const { payload } = await jwtVerify(token, sessionKey());
-    if (!payload.sub || (payload.role !== "CUSTOMER" && payload.role !== "ADMIN")) return null;
+    if (!payload.sub || (payload.role !== "CUSTOMER" && payload.role !== "ADMIN") || typeof payload.version !== "number" || !Number.isInteger(payload.version)) return null;
     subject = payload.sub;
+    version = payload.version;
   } catch {
     return null;
   }
-  return prisma.user.findUnique({
+  const user = await prisma.user.findUnique({
     where: { id: subject },
-    select: { id: true, name: true, email: true, phone: true, role: true },
+    select: { id: true, name: true, email: true, phone: true, role: true, sessionVersion: true, emailVerifiedAt: true },
   });
+  if (!user || user.sessionVersion !== version || (user.role === "CUSTOMER" && !user.emailVerifiedAt)) return null;
+  return { id: user.id, name: user.name, email: user.email, phone: user.phone, role: user.role };
 }
 
 export async function requireUser(role?: UserRole) {

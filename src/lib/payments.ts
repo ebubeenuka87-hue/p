@@ -1,6 +1,7 @@
-import { timingSafeEqual, createHmac } from "node:crypto";
+import "server-only";
 import type { PaymentStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { validPaystackSignature as verifySignature } from "@/lib/paystack-signature";
 
 type PaystackVerification = {
   status: boolean;
@@ -37,17 +38,25 @@ export async function applyVerifiedPayment(reference: string, data: PaystackVeri
     payment.order.totalKobo === payment.amountKobo;
 
   if (successful) {
+    let needsReview = false;
     await prisma.$transaction(async (tx) => {
-      const claimed = await tx.payment.updateMany({ where: { id: payment.id, status: "PENDING" }, data: {
+      const latestOrder = await tx.order.findUnique({ where: { id: payment.orderId }, select: { status: true, stockReleased: true } });
+      if (!latestOrder) return;
+      needsReview = latestOrder.status === "CANCELLED" || latestOrder.stockReleased;
+      const claimed = await tx.payment.updateMany({ where: { id: payment.id, status: { not: "PAID" } }, data: {
         status: "PAID",
-        paidAt: data.paid_at ? new Date(data.paid_at) : new Date(),
+        paidAt: data.paid_at && Number.isFinite(Date.parse(data.paid_at)) ? new Date(data.paid_at) : new Date(),
         gatewayResponse: { status: data.status, amount: data.amount, currency: data.currency, gatewayResponse: data.gateway_response ?? null },
       } });
       if (claimed.count) {
-        await tx.order.updateMany({ where: { id: payment.orderId, status: "PENDING" }, data: { status: "PAID", paymentStatus: "PAID" } });
+        await tx.order.update({ where: { id: payment.orderId }, data: {
+          paymentStatus: "PAID",
+          ...(latestOrder.status === "PENDING" && !latestOrder.stockReleased ? { status: "PAID" } : {}),
+        } });
       }
     });
     const latest = await prisma.payment.findUnique({ where: { reference }, select: { status: true } });
+    if (latest?.status === "PAID" && needsReview) return "REVIEW" as const;
     return latest?.status === "PAID" ? "PAID" as const : "NOT_PAID" as const;
   }
 
@@ -61,21 +70,21 @@ export async function applyVerifiedPayment(reference: string, data: PaystackVeri
 export async function releaseReservedOrder(orderId: string, paymentStatus: Extract<PaymentStatus, "FAILED" | "CANCELLED">) {
   await prisma.$transaction(async (tx) => {
     const order = await tx.order.findUnique({ where: { id: orderId }, include: { items: true } });
-    if (!order || order.stockReleased || order.paymentStatus === "PAID") return;
+    if (!order) return;
+    const claimed = await tx.order.updateMany({
+      where: { id: orderId, stockReleased: false, paymentStatus: { not: "PAID" } },
+      data: { status: "CANCELLED", paymentStatus, stockReleased: true },
+    });
+    if (!claimed.count) return;
     for (const item of order.items) {
       await tx.product.update({ where: { id: item.productId }, data: { stock: { increment: item.quantity } } });
     }
-    await tx.order.update({ where: { id: orderId }, data: { status: "CANCELLED", paymentStatus, stockReleased: true } });
     await tx.payment.updateMany({ where: { orderId, status: "PENDING" }, data: { status: paymentStatus } });
   });
 }
 
 export function validPaystackSignature(rawBody: string, signature: string | null) {
-  const secret = process.env.PAYSTACK_WEBHOOK_SECRET || process.env.PAYSTACK_SECRET_KEY;
-  if (!secret || !signature || !/^[a-f0-9]{128}$/i.test(signature)) return false;
-  const expected = createHmac("sha512", secret).update(rawBody).digest();
-  const actual = Buffer.from(signature, "hex");
-  return actual.length === expected.length && timingSafeEqual(actual, expected);
+  return verifySignature(rawBody, signature, process.env.PAYSTACK_SECRET_KEY);
 }
 
 export type PaymentTransaction = Prisma.TransactionClient;

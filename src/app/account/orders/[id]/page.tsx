@@ -1,15 +1,14 @@
 import Link from "next/link";
-import { notFound, redirect } from "next/navigation";
-import { currentUser } from "@/lib/auth";
+import { notFound } from "next/navigation";
+import { requireCustomer } from "@/lib/customer-auth";
 import { prisma } from "@/lib/prisma";
 import { formatNaira } from "@/lib/money";
 
 export const dynamic = "force-dynamic";
 
 export default async function AccountOrderPage({ params }: { params: Promise<{ id: string }> }) {
-  const user = await currentUser();
-  if (!user) redirect("/login");
   const { id } = await params;
+  const user = await requireCustomer(`/account/orders/${encodeURIComponent(id)}`);
   const order = await prisma.order.findFirst({ where: { id, userId: user.id }, include: { items: true, payment: true } });
   if (!order) notFound();
   return <section className="page-wrap"><div className="page-heading"><span className="eyebrow">Order details</span><h1>{order.orderNumber}</h1><p>{new Intl.DateTimeFormat("en-NG", { dateStyle: "long", timeStyle: "short" }).format(order.createdAt)}</p></div>

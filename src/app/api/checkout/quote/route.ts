@@ -22,8 +22,11 @@ export async function GET(request: Request) {
     }
     const subtotalKobo = products.reduce((total, product) => total + product.priceKobo * quantities.get(product.id)!, 0);
     const deliveryNaira = Number(process.env.DELIVERY_FEE_NGN ?? "2500");
-    if (!Number.isSafeInteger(deliveryNaira) || deliveryNaira < 0) throw new Error("DELIVERY_FEE_NGN must be a whole number.");
+    if (!Number.isSafeInteger(deliveryNaira) || deliveryNaira < 0 || deliveryNaira > 21_474_836) throw new Error("DELIVERY_FEE_NGN must be a whole number within the supported payment limit.");
     const deliveryFeeKobo = subtotalKobo >= 15_000_000 ? 0 : deliveryNaira * 100;
+    if (!Number.isSafeInteger(subtotalKobo) || subtotalKobo > 2_147_483_647 - deliveryFeeKobo) {
+      return NextResponse.json({ error: "This order exceeds the maximum checkout amount. Please contact the store." }, { status: 409 });
+    }
     return NextResponse.json({
       items: products.map((product) => ({ id: product.id, name: product.name, quantity: quantities.get(product.id), priceKobo: product.priceKobo })),
       subtotalKobo,

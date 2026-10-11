@@ -20,7 +20,10 @@ export function errorResponse(error: unknown) {
 
 export async function requireSameOrigin(request: Request) {
   const origin = request.headers.get("origin");
-  if (!origin || new URL(origin).origin !== new URL(request.url).origin) {
+  const expectedOrigin = process.env.NEXT_PUBLIC_APP_URL
+    ? new URL(process.env.NEXT_PUBLIC_APP_URL).origin
+    : new URL(request.url).origin;
+  if (!origin || origin !== expectedOrigin) {
     throw new Error("AUTH:Unauthorized");
   }
 }
