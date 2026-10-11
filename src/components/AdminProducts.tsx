@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import { createClient } from "@supabase/supabase-js";
 import { useState, type FormEvent } from "react";
 import { formatNaira } from "@/lib/money";
 
@@ -53,13 +54,37 @@ export function AdminProducts({ initialProducts }: { initialProducts: Product[] 
       if (existing.length + files.length > 8) {
         throw new Error("A product can have up to 8 images. Remove an image URL or choose fewer files.");
       }
+      const publishableKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+      if (!publishableKey) {
+        throw new Error("Supabase browser uploads are not configured. Set NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY in the server environment and restart the app.");
+      }
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      if (!supabaseUrl) {
+        throw new Error("Supabase browser uploads are not configured. Set NEXT_PUBLIC_SUPABASE_URL in the server environment and restart the app.");
+      }
+      const supabase = createClient(supabaseUrl, publishableKey, {
+        auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
+      });
       for (const file of files) {
-        const form = new FormData();
-        form.append("file", file);
-        const response = await fetch("/api/admin/images/upload", { method: "POST", body: form });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error ?? "Image upload failed.");
-        if (typeof data.publicUrl !== "string") throw new Error("The image was uploaded but no public URL was returned.");
+        if (file.size > 8 * 1024 * 1024) throw new Error("Images must be 8 MB or smaller.");
+        if (!["image/jpeg", "image/png", "image/webp", "image/avif"].includes(file.type)) {
+          throw new Error("Choose a JPEG, PNG, WebP, or AVIF image.");
+        }
+        const headerBytes = Array.from(new Uint8Array(await file.slice(0, 16).arrayBuffer()));
+        const response = await fetch("/api/admin/images/upload", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ contentType: file.type, size: file.size, headerBytes }),
+        });
+        const data = await response.json() as { error?: string; token?: string; path?: string; bucket?: string; publicUrl?: string };
+        if (!response.ok) throw new Error(data.error ?? "Could not prepare the image upload.");
+        if (!data.path || !data.token || !data.bucket || !data.publicUrl) throw new Error("Could not prepare the image upload.");
+        const { error: uploadError } = await supabase.storage.from(data.bucket).uploadToSignedUrl(data.path, data.token, file, {
+          contentType: file.type,
+          cacheControl: "31536000",
+          upsert: false,
+        });
+        if (uploadError) throw new Error(`Cloud image upload failed: ${uploadError.message}`);
         setDraft((current) => ({ ...current, imageUrls: [current.imageUrls.trim(), data.publicUrl].filter(Boolean).join("\n") }));
       }
       setSuccess(`${files.length} image${files.length === 1 ? "" : "s"} uploaded. Save the product to keep them.`);

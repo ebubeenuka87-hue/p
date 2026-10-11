@@ -22,6 +22,14 @@ export function validateProductImage(bytes: Uint8Array) {
   return { ok: true as const, ...type };
 }
 
+export function validateProductImageHeader(bytes: Uint8Array, declaredContentType: string) {
+  const type = productImageType(bytes);
+  if (!type || type.contentType !== declaredContentType) {
+    return { ok: false as const, error: "Choose a valid JPEG, PNG, WebP, or AVIF image." };
+  }
+  return { ok: true as const, ...type };
+}
+
 export function supabaseProductImagePublicUrl(projectUrl: string, bucket: string, key: string) {
   const url = new URL(projectUrl);
   return `${url.origin}/storage/v1/object/public/${encodeURIComponent(bucket)}/${key.split("/").map(encodeURIComponent).join("/")}`;

@@ -16,7 +16,7 @@ export const loginSchema = z.object({
 
 export const verificationSchema = z.object({
   email: emailSchema,
-  code: z.string().regex(/^\d{6}$/, "Enter the six-digit code sent to your phone."),
+  code: z.string().regex(/^\d{6}$/, "Enter the six-digit code sent to your email."),
 });
 
 export const profileSchema = z.object({

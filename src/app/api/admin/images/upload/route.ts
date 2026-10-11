@@ -1,21 +1,21 @@
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { requireUser } from "@/lib/auth";
 import { errorResponse, requireSameOrigin } from "@/lib/http";
-import { supabaseProductImagePublicUrl, validateProductImage, validateSupabaseProjectUrl } from "@/lib/product-images";
+import { supabaseProductImagePublicUrl, validateProductImageHeader, validateSupabaseProjectUrl } from "@/lib/product-images";
 
-const maximumRequestBytes = 9 * 1024 * 1024;
+const signRequestSchema = z.object({
+  contentType: z.enum(["image/jpeg", "image/png", "image/webp", "image/avif"]),
+  size: z.number().int().positive(),
+  headerBytes: z.array(z.number().int().min(0).max(255)).min(3).max(16),
+});
 
 export async function POST(request: Request) {
   try {
     await requireSameOrigin(request);
     await requireUser("ADMIN");
-
-    const contentLength = Number(request.headers.get("content-length"));
-    if (Number.isFinite(contentLength) && contentLength > maximumRequestBytes) {
-      return NextResponse.json({ error: "Images must be 8 MB or smaller." }, { status: 413 });
-    }
 
     const supabaseUrl = process.env.SUPABASE_URL?.trim();
     const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -25,17 +25,11 @@ export async function POST(request: Request) {
     }
 
     validateSupabaseProjectUrl(supabaseUrl);
-    const form = await request.formData();
-    const file = form.get("file");
-    if (!(file instanceof File)) {
-      return NextResponse.json({ error: "Choose an image file to upload." }, { status: 400 });
-    }
-    if (file.size > 8 * 1024 * 1024) {
+    const input = signRequestSchema.parse(await request.json());
+    if (input.size > 8 * 1024 * 1024) {
       return NextResponse.json({ error: "Images must be 8 MB or smaller." }, { status: 413 });
     }
-
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    const image = validateProductImage(bytes);
+    const image = validateProductImageHeader(Uint8Array.from(input.headerBytes), input.contentType);
     if (!image.ok) return NextResponse.json({ error: image.error }, { status: 400 });
 
     const key = `products/${randomUUID()}.${image.extension}`;
@@ -43,21 +37,21 @@ export async function POST(request: Request) {
       const supabase = createClient(supabaseUrl, serviceRoleKey, {
         auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
       });
-      const { error } = await supabase.storage.from(bucket).upload(key, bytes, {
-        contentType: image.contentType,
-        cacheControl: "31536000",
-        upsert: false,
-      });
+      const { data, error } = await supabase.storage.from(bucket).createSignedUploadUrl(key, { upsert: false });
       if (error) {
-        console.error("Supabase Storage upload failed:", error.message);
-        return NextResponse.json({ error: "Cloud image upload failed. Check the Supabase project URL, bucket name, bucket permissions, and server-side secret key." }, { status: 502 });
+        console.error("Supabase Storage signed upload URL creation failed:", error.message);
+        return NextResponse.json({ error: "Could not prepare a secure image upload. Check the Supabase project URL, bucket name, and server-side secret key." }, { status: 502 });
       }
+      return NextResponse.json({
+        token: data.token,
+        path: data.path,
+        bucket,
+        publicUrl: supabaseProductImagePublicUrl(supabaseUrl, bucket, key),
+      }, { status: 201, headers: { "Cache-Control": "no-store" } });
     } catch (error) {
-      console.error("Supabase Storage upload request failed", error);
+      console.error("Supabase Storage signed upload URL request failed", error);
       return NextResponse.json({ error: "Could not connect to Supabase Storage. Check the project URL and try again." }, { status: 502 });
     }
-
-    return NextResponse.json({ publicUrl: supabaseProductImagePublicUrl(supabaseUrl, bucket, key) }, { status: 201 });
   } catch (error) {
     return errorResponse(error);
   }

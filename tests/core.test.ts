@@ -6,7 +6,7 @@ import { checkoutSchema, complaintSchema, emailSchema, productSchema, verificati
 import { validPaystackSignature } from "../src/lib/paystack-signature";
 import { configuredSessionSecret } from "../src/lib/session-secret";
 import { customerReturnPath } from "../src/lib/return-to";
-import { supabaseProductImagePublicUrl, validateProductImage, validateSupabaseProjectUrl } from "../src/lib/product-images";
+import { supabaseProductImagePublicUrl, validateProductImage, validateProductImageHeader, validateSupabaseProjectUrl } from "../src/lib/product-images";
 
 test("formats persisted kobo amounts as Nigerian naira", () => {
   assert.match(formatNaira(1_850_000), /18,500/);
@@ -79,6 +79,8 @@ test("product images are optional and accept uploaded URLs, hosted URLs, or both
 test("uploaded product images require supported file signatures and valid Supabase public URLs", () => {
   const pngHeader = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
   assert.deepEqual(validateProductImage(pngHeader), { ok: true, contentType: "image/png", extension: "png" });
+  assert.deepEqual(validateProductImageHeader(pngHeader, "image/png"), { ok: true, contentType: "image/png", extension: "png" });
+  assert.equal(validateProductImageHeader(pngHeader, "image/jpeg").ok, false);
   assert.equal(validateProductImage(Uint8Array.from([1, 2, 3])).ok, false);
   assert.equal(validateProductImage(new Uint8Array(0)).ok, false);
   assert.equal(supabaseProductImagePublicUrl("https://project.supabase.co", "product-images", "products/toria image.png"), "https://project.supabase.co/storage/v1/object/public/product-images/products/toria%20image.png");
